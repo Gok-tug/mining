@@ -907,6 +907,65 @@ function main()
 end
 
 -- ========================================
+-- FUEL HELPER FUNCTIONS
+-- ========================================
+
+function showFuelStatus()
+    local current_fuel = turtle.getFuelLevel()
+    local needed_fuel = calculateFuelNeeded()
+    
+    print("⛽ FUEL DURUMU:")
+    print("================")
+    print("🔥 Mevcut Fuel: " .. current_fuel)
+    print("📊 Tahmini İhtiyaç: " .. needed_fuel)
+    
+    if current_fuel >= needed_fuel then
+        print("✅ Fuel yeterli!")
+    elseif current_fuel >= CONFIG.FUEL_MIN then
+        print("⚠️  Fuel azalıyor, dikkatli ol!")
+    else
+        print("❌ Fuel kritik seviyede!")
+    end
+    
+    -- Fuel slot kontrolü
+    if turtle.getItemCount(CONFIG.FUEL_SLOT) > 0 then
+        turtle.select(CONFIG.FUEL_SLOT)
+        local success, data = turtle.getItemDetail()
+        if success and data.name then
+            print("📦 Fuel Slot: " .. data.count .. "x " .. data.name)
+        end
+    else
+        print("📦 Fuel Slot: Boş")
+    end
+end
+
+function refuelNow()
+    local initial_fuel = turtle.getFuelLevel()
+    
+    print("⛽ Manuel fuel ekleniyor...")
+    
+    if autoRefuel() then
+        local gained = turtle.getFuelLevel() - initial_fuel
+        print("✅ " .. gained .. " fuel eklendi!")
+        print("🔥 Yeni fuel seviyesi: " .. turtle.getFuelLevel())
+    else
+        print("❌ Kullanılabilir fuel bulunamadı!")
+        print("💡 Slot " .. CONFIG.FUEL_SLOT .. "'a coal/wood koyun")
+    end
+end
+
+function quickFuelCheck()
+    local fuel = turtle.getFuelLevel()
+    if fuel > CONFIG.FUEL_MIN then
+        print("✅ Fuel OK: " .. fuel)
+        return true
+    else
+        print("⚠️ Fuel LOW: " .. fuel)
+        return false
+    end
+end
+
+-- ========================================
 -- DIAMOND HUNTER PRO KULLANICI ARAYÜZÜ
 -- ========================================
 
@@ -951,28 +1010,51 @@ _G.resetDiamondHunter = function()
     print("🔄 Diamond Hunter Pro sıfırlandı. Yeni mining session başlatılabilir.")
 end
 
--- Başlangıç mesajları
+-- ========================================
+-- SCRIPT BAŞLATMA
+-- ========================================
+
 print()
-print("💎 DIAMOND HUNTER PRO v1.0 HAZIR!")
-print("===================================")
-print()
-print("🎯 KOMUTLAR:")
-print("   main()              - Diamond mining başlat")
-print("   diamondStats()      - İstatistikleri göster")  
-print("   resetDiamondHunter() - Sistemi sıfırla")
-print()
-print("⚙️  YARDIMCI KOMUTLAR:")
-print("   refuelNow()         - Fuel doldur")
-print("   showFuelStatus()    - Fuel durumu")
-print()
-print("🚀 BAŞLATMAK İÇİN: 'main()' yazın")
+print("💎 DIAMOND HUNTER PRO v1.0 YÜKLENİYOR...")
+print("=========================================")
 print()
 
 -- İlk fuel kontrolü
-if turtle.getFuelLevel() < CONFIG.FUEL_MIN then
-    print("⚠️  Fuel azaldı! Önce 'refuelNow()' çalıştırın.")
+local current_fuel = turtle.getFuelLevel()
+if current_fuel < CONFIG.FUEL_MIN then
+    print("⚠️  Fuel azaldı! Otomatik fuel deneniyor...")
+    autoRefuel()
+    current_fuel = turtle.getFuelLevel()
+    
+    if current_fuel < CONFIG.FUEL_EMERGENCY then
+        print("❌ Kritik fuel eksikliği!")
+        print("💡 Slot " .. CONFIG.FUEL_SLOT .. "'a coal/wood ekleyin")
+        print("🔧 Kullanılabilir komutlar:")
+        print("   refuelNow()         - Fuel doldur")
+        print("   showFuelStatus()    - Fuel durumu")
+        print("   main()              - Fuel düzelttikten sonra mining başlat")
+        return
+    end
 else
-    print("✅ Fuel durumu iyi: " .. turtle.getFuelLevel())
+    print("✅ Fuel durumu iyi: " .. current_fuel)
+end
+
+-- Torch kontrolü
+if not selectItem(CONFIG.TORCH_SLOT) then
+    print("❌ Slot " .. CONFIG.TORCH_SLOT .. "'ta torch bulunamadı!")
+    print("💡 Torch ekleyin ve tekrar çalıştırın")
+    print("🔧 Kullanılabilir komutlar:")
+    print("   main()              - Torch ekledikten sonra mining başlat")
+    return
+end
+
+-- Chest kontrolü  
+if not selectItem(CONFIG.CHEST_SLOT) then
+    print("❌ Slot " .. CONFIG.CHEST_SLOT .. "'ta chest bulunamadı!")
+    print("💡 Chest ekleyin ve tekrar çalıştırın")
+    print("🔧 Kullanılabilir komutlar:")
+    print("   main()              - Chest ekledikten sonra mining başlat")
+    return
 end
 
 -- Diamond Hunter durumunu göster
@@ -985,17 +1067,23 @@ else
 end
 
 print()
-print("💡 Diamond Hunter Pro ile sonsuz diamond empire kurabilirsiniz!")
-print("   Her 'main()' komutu yeni bir alan kazacak ve otomatik genişleyecek.")
+print("🎯 TÜM KONTROLLER BAŞARILI!")
+print("🚀 DIAMOND HUNTER PRO OTOMATIK BAŞLATILIYOR...")
+print()
 
--- ========================================
 -- OTOMATIK BAŞLATMA
--- ========================================
+print("⏱️  5 saniye sonra mining başlayacak...")
+print("   ❌ Durdurmak için: Ctrl+T tuşlayın")
+print("   ✅ Devam etmek için: Bekleyin")
+
+for i = 5, 1, -1 do
+    print("⏳ " .. i .. "...")
+    sleep(1)
+end
 
 print()
-print("�� DIAMOND HUNTER PRO BAŞLATIYOR...")
-print("💎 DIAMOND MINING BAŞLIYOR!")
-print("=============================")
+print("🚀🚀🚀 DIAMOND HUNTER PRO BAŞLATIYOR! 🚀🚀🚀")
+print()
 
--- Direkt main() fonksiyonunu çağır
+-- Mining'i başlat
 main()
