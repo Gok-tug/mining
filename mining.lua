@@ -390,7 +390,7 @@ function digTunnelSection(digDown)
         else
             if turtle.detectDown() then
                 local success, data = turtle.inspectDown()
-                if success and data.name then
+                if success and data and data.name then -- HATA DÜZELTİLDİ: data nil kontrolü eklendi
                     if string.find(data.name, "lava") or string.find(data.name, "water") then
                         log("🚨 TEHLIKE: " .. data.name .. " tespit edildi Y=" .. (pos.y - 1) .. " seviyesinde!")
                         return false
