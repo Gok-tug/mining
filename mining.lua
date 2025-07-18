@@ -271,7 +271,7 @@ function autoRefuel()
         if turtle.getItemCount(slot) > 0 then
             turtle.select(slot)
             local success, data = turtle.getItemDetail()
-            if success and data.name then
+            if success and data and data.name then -- data nil kontrolü eklendi
                 -- Coal, wood, charcoal vs. kontrol et
                 if string.find(data.name, "coal") or 
                    string.find(data.name, "wood") or
@@ -419,7 +419,7 @@ function checkForDiamond(direction, x, y, z)
         if turtle.getItemCount(slot) > 0 then
             turtle.select(slot)
             local success, data = turtle.getItemDetail()
-            if success and data.name then
+            if success and data and data.name then -- data nil kontrolü eklendi
                 if string.find(data.name, "diamond") and not string.find(data.name, "ore") then
                     -- Ham diamond bulundu! (diamond ore değil)
                     saveDiamondLocation(x, y, z)
@@ -931,8 +931,10 @@ function showFuelStatus()
     if turtle.getItemCount(CONFIG.FUEL_SLOT) > 0 then
         turtle.select(CONFIG.FUEL_SLOT)
         local success, data = turtle.getItemDetail()
-        if success and data.name then
+        if success and data and data.name then -- data nil kontrolü eklendi
             print("📦 Fuel Slot: " .. data.count .. "x " .. data.name)
+        else
+            print("📦 Fuel Slot: " .. turtle.getItemCount(CONFIG.FUEL_SLOT) .. " adet (tip bilinmiyor)")
         end
     else
         print("📦 Fuel Slot: Boş")
