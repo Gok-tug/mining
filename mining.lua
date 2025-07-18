@@ -4,7 +4,7 @@
 -- ========================================
 --
 -- SETUP TALİMATLARI:
--- 1. Turtle'ı mining yapmak istediğiniz yerin üstüne yerleştirin
+-- 1. Turtle'ı Y=12 seviyesine yerleştirin (örn: surface'dan 52 blok aşağı)
 -- 2. Home chest'i turtle'ın ALTINA yerleştirin (items buraya aktarılacak)
 -- 3. Inventory setup:
 --    Slot 1: Torch'lar (64 adet önerilir)
@@ -13,9 +13,11 @@
 --    Slot 2-14: Boş (mining loot için)
 -- 4. Script'i çalıştırın: lua mining.lua
 -- 5. Script otomatik olarak:
---    - Y=11 seviyesine inecek
+--    - 3-kat mining yapacak (Y=11, Y=12, Y=13)
+--    - Torch'ları Y=11'e yerleştirecek (turtle Y=12'de kalır)
 --    - Branch mining pattern başlatacak
 --    - Inventory dolunca home'a dönüp boşaltacak
+--    - Geri dönerken torch'lara ÇARPMAYACAK (farklı seviyede!)
 --    - Mining tamamlandığında tüm items'ları home chest'e aktaracak
 --
 -- ÖZELLİKLER:
@@ -33,8 +35,8 @@ local CONFIG = {
     TUNNEL_LENGTH = 50,        -- Ana tünel uzunluğu
     BRANCH_LENGTH = 30,        -- Yan dal uzunluğu  
     BRANCH_SPACING = 4,        -- Dallar arası mesafe
-    MINING_LEVEL = 11,         -- Y koordinatı (diamond level - alt seviye)
-    TUNNEL_HEIGHT = 2,         -- Tünel yüksekliği (1=tek blok, 2=çift blok)
+    MINING_LEVEL = 12,         -- Y koordinatı (turtle pozisyonu - orta seviye)
+    TUNNEL_HEIGHT = 3,         -- Tünel yüksekliği (3=üç kat: Y=11,12,13)
     FUEL_MIN = 1000,          -- Minimum fuel kontrolü
     FUEL_EMERGENCY = 200,     -- Acil durum fuel limiti (home'a dönmek için)
     TORCH_SLOT = 1,           -- Torch slot numarası
@@ -49,7 +51,6 @@ local direction = NORTH
 -- POSITION TRACKING
 local pos = {x = 0, y = 0, z = 0}
 local home_pos = {x = 0, y = 0, z = 0}
-local torch_positions = {}
 local mining_path = {} -- Mining rotası kayıt
 
 -- ========================================
@@ -119,14 +120,17 @@ function autoRefuel()
 end
 
 function calculateFuelNeeded()
-    -- Mining için gereken fuel'i hesapla
+    -- 3-kat mining için gereken fuel'i hesapla
     local tunnel_moves = CONFIG.TUNNEL_LENGTH * 2 -- İleri gidip geri gel
     local branch_moves = CONFIG.BRANCH_LENGTH * 2 * (CONFIG.TUNNEL_LENGTH / CONFIG.BRANCH_SPACING) * 2 -- Tüm dallar
     local home_distance = getDistanceToHome() * 2 -- Home'a gidip gelme
     
-    local total_moves = tunnel_moves + branch_moves + home_distance + 500 -- Safety margin
+    -- 3-kat mining daha fazla fuel tüketir (daha fazla kazma işlemi)
+    local mining_bonus = CONFIG.TUNNEL_HEIGHT * 100 -- Kat başına ekstra fuel
     
-    log("📊 Tahmini fuel ihtiyacı: " .. total_moves)
+    local total_moves = tunnel_moves + branch_moves + home_distance + mining_bonus + 500 -- Safety margin
+    
+    log("📊 Tahmini fuel ihtiyacı: " .. total_moves .. " (" .. CONFIG.TUNNEL_HEIGHT .. "-kat mining)")
     return total_moves
 end
 
@@ -167,7 +171,10 @@ end
 
 function safeForward()
     -- Önce tünel yüksekliğine göre tüm blokları kaz
-    digTunnelSection()
+    if not digTunnelSection() then
+        log("🚨 Güvenlik riski tespit edildi, mining durduruluyor!")
+        return false
+    end
     
     -- Sonra ilerle
     while not turtle.forward() do
@@ -185,35 +192,45 @@ function safeForward()
     elseif direction == SOUTH then updatePosition(0, 0, 1)
     elseif direction == WEST then updatePosition(-1, 0, 0)
     end
+    
+    return true
 end
 
 function digTunnelSection()
-    -- Önce önündeki bloku kaz
+    -- Önce önündeki bloku kaz (Y=12 - turtle seviyesi)
     while turtle.detect() do
         turtle.dig()
         sleep(0.1)
     end
     
-    -- Tünel yüksekliği 2 ise üst bloku da kaz
-    if CONFIG.TUNNEL_HEIGHT == 2 then
+    -- 3 kat mining için üst bloku da kaz (Y=13)
+    if CONFIG.TUNNEL_HEIGHT >= 2 then
         while turtle.detectUp() do
             turtle.digUp()
             sleep(0.1)
         end
     end
     
-    -- Her zaman alt bloku kontrol et (lava/water için)
-    if turtle.detectDown() then
-        local success, data = turtle.inspectDown()
-        if success and data.name then
-            -- Lava veya water değilse kaz
-            if not string.find(data.name, "lava") and not string.find(data.name, "water") then
+    -- 3 kat mining için alt bloku da kaz (Y=11) - ama önce güvenlik kontrolü
+    if CONFIG.TUNNEL_HEIGHT >= 3 then
+        if turtle.detectDown() then
+            local success, data = turtle.inspectDown()
+            if success and data.name then
+                if string.find(data.name, "lava") or string.find(data.name, "water") then
+                    log("🚨 TEHLIKE: " .. data.name .. " tespit edildi Y=" .. (pos.y - 1) .. " seviyesinde!")
+                    return false -- Lava/water tespit edilirse mining durdur
+                end
+            end
+            
+            -- Güvenliyse alt bloku kaz (Y=11)
+            while turtle.detectDown() do
                 turtle.digDown()
-            else
-                log("⚠️  " .. data.name .. " tespit edildi, alt blok kazılmadı")
+                sleep(0.1)
             end
         end
     end
+    
+    return true
 end
 
 function safeUp()
@@ -256,86 +273,27 @@ function turnAround()
 end
 
 -- ========================================
--- SMART TORCH PLACEMENT SYSTEM
+-- SIMPLE GROUND TORCH SYSTEM
 -- ========================================
 
-function isWallPresent(side)
-    if side == "left" then
-        turnLeft()
-        local hasWall = turtle.detect()
-        turnRight()
-        return hasWall
-    elseif side == "right" then
-        turnRight() 
-        local hasWall = turtle.detect()
-        turnLeft()
-        return hasWall
-    end
-    return false
-end
-
-function canPlaceTorch(side)
-    -- Torch'ın geri dönerken engel olup olmayacağını kontrol et
-    local torch_pos = {x = pos.x, y = pos.y, z = pos.z}
-    
-    if side == "left" then
-        if direction == NORTH then torch_pos.x = torch_pos.x - 1
-        elseif direction == EAST then torch_pos.z = torch_pos.z - 1
-        elseif direction == SOUTH then torch_pos.x = torch_pos.x + 1
-        elseif direction == WEST then torch_pos.z = torch_pos.z + 1
-        end
-    end
-    
-    -- Önceden torch yerleştirilmiş mi kontrol et
-    for _, old_pos in pairs(torch_positions) do
-        if old_pos.x == torch_pos.x and old_pos.y == torch_pos.y and old_pos.z == torch_pos.z then
-            return false -- Zaten torch var
-        end
-    end
-    
-    return true
-end
-
-function placeTorchSmart(side, steps_taken)
-    -- Torch yerleştirme koşulları:
-    -- 1. Belirli aralıklarla
-    -- 2. Duvar mevcut olmalı  
-    -- 3. Önceden torch yoksa
-    -- 4. Torch slot'unda item var
+function placeGroundTorch(steps_taken)
+    -- 3-kat mining torch sistemi:
+    -- 1. Turtle Y=12'de hareket ediyor
+    -- 2. Torch Y=11'e (aşağıya) yerleştir  
+    -- 3. Geri dönerken turtle Y=12'de kalır = ÇARPIŞMA YOK!
     
     if steps_taken % CONFIG.TORCH_INTERVAL ~= 0 then return false end
     if not selectItem(CONFIG.TORCH_SLOT) then return false end
-    if not isWallPresent(side) then 
-        log("⚠️  " .. side .. " tarafında duvar yok, torch yerleştirilmedi")
-        return false 
-    end
-    if not canPlaceTorch(side) then return false end
     
-    if side == "left" then
-        turnLeft()
-        if turtle.place() then
-            -- Torch pozisyonunu kaydet
-            local torch_pos = {x = pos.x, y = pos.y, z = pos.z}
-            if direction == EAST then torch_pos.x = torch_pos.x - 1
-            elseif direction == SOUTH then torch_pos.z = torch_pos.z - 1  
-            elseif direction == WEST then torch_pos.x = torch_pos.x + 1
-            elseif direction == NORTH then torch_pos.z = torch_pos.z + 1
-            end
-            table.insert(torch_positions, torch_pos)
-            log("🔥 Torch yerleştirildi: " .. side)
-        end
-        turnRight()
+    -- Alt seviyeye torch yerleştir (Y=11)
+    if turtle.placeDown() then
+        log("🔥 Torch yerleştirildi Y=" .. (pos.y - 1) .. " (turtle Y=" .. pos.y .. ") - step: " .. steps_taken)
+        log("   ✅ Geri dönerken çarpışma riski YOK!")
         return true
-    elseif side == "right" then
-        turnRight()
-        if turtle.place() then
-            log("🔥 Torch yerleştirildi: " .. side)
-        end
-        turnLeft() 
-        return true
+    else
+        log("⚠️  Alt seviyeye torch yerleştirilemedi")
+        return false
     end
-    
-    return false
 end
 
 -- ========================================
@@ -393,17 +351,17 @@ function returnToHome()
         -- X ekseni
         if pos.x < home_pos.x then
             faceDirection(EAST)
-            safeForward()
+            if not safeForward() then return false end
         elseif pos.x > home_pos.x then
             faceDirection(WEST) 
-            safeForward()
+            if not safeForward() then return false end
         -- Z ekseni
         elseif pos.z < home_pos.z then
             faceDirection(SOUTH)
-            safeForward()
+            if not safeForward() then return false end
         elseif pos.z > home_pos.z then
             faceDirection(NORTH)
-            safeForward()
+            if not safeForward() then return false end
         -- Y ekseni
         elseif pos.y < home_pos.y then
             safeUp()
@@ -492,17 +450,17 @@ function returnToMiningPosition(target_pos)
         -- X ekseni
         if pos.x < target_pos.x then
             faceDirection(EAST)
-            safeForward()
+            if not safeForward() then return false end
         elseif pos.x > target_pos.x then
             faceDirection(WEST)
-            safeForward()
+            if not safeForward() then return false end
         -- Z ekseni  
         elseif pos.z < target_pos.z then
             faceDirection(SOUTH)
-            safeForward()
+            if not safeForward() then return false end
         elseif pos.z > target_pos.z then
             faceDirection(NORTH)
-            safeForward()
+            if not safeForward() then return false end
         -- Y ekseni
         elseif pos.y < target_pos.y then
             safeUp()
@@ -541,11 +499,14 @@ function mineForward(steps, place_torches)
         end
         
         -- İleri git ve kaz (digTunnelSection dahil)
-        safeForward()
+        if not safeForward() then
+            log("❌ Güvenlik riski nedeniyle mining durduruluyor")
+            return false
+        end
         
-        -- Torch yerleştir (sadece sol tarafa, geri dönerken engel olmaz)
+        -- Zemin torch yerleştir (basit ve etkili!)
         if place_torches then
-            placeTorchSmart("left", step)
+            placeGroundTorch(step)
         end
         
         -- Progress göster
@@ -581,7 +542,14 @@ function branchMining()
     log("🚀 Branch Mining başlatılıyor...")
     log("📍 Hedef Level: Y=" .. CONFIG.MINING_LEVEL .. " (Tünel Yüksekliği: " .. CONFIG.TUNNEL_HEIGHT .. ")")
     
-    if CONFIG.TUNNEL_HEIGHT == 2 then
+    if CONFIG.TUNNEL_HEIGHT == 3 then
+        log("💎 3-KAT ULTRA Tünel Modu:")
+        log("   📍 Y=" .. (CONFIG.MINING_LEVEL - 1) .. " (alt kat - torch seviyesi)")
+        log("   📍 Y=" .. CONFIG.MINING_LEVEL .. " (orta kat - turtle seviyesi)")  
+        log("   📍 Y=" .. (CONFIG.MINING_LEVEL + 1) .. " (üst kat)")
+        log("   🔥 Torch Y=" .. (CONFIG.MINING_LEVEL - 1) .. "'e yerleştirilecek")
+        log("   ✅ Geri dönerken çarpışma riski YOK!")
+    elseif CONFIG.TUNNEL_HEIGHT == 2 then
         log("💎 2x1 Tünel Modu: Y=" .. CONFIG.MINING_LEVEL .. " ve Y=" .. (CONFIG.MINING_LEVEL + 1) .. " kazılacak")
     else
         log("📏 1x1 Tünel Modu: Sadece Y=" .. CONFIG.MINING_LEVEL .. " kazılacak")
@@ -620,7 +588,7 @@ function branchMining()
     
     log("🎉 Branch Mining tamamlandı!")
     log("📊 Toplam dal sayısı: " .. branches_made)
-    log("🔥 Yerleştirilen torch sayısı: " .. #torch_positions)
+    log("🔥 3-kat torch sistemi: Y=" .. (CONFIG.MINING_LEVEL - 1) .. " seviyesine her " .. CONFIG.TORCH_INTERVAL .. " blokta bir torch yerleştirildi")
 end
 
 -- ========================================
