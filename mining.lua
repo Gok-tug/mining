@@ -1,22 +1,32 @@
 -- ========================================
--- ADVANCED MINING TURTLE SCRIPT v1.1
+-- ADVANCED MINING TURTLE SCRIPT v1.0
+-- Optimal Branch Mining with Smart Torch System
 -- ========================================
 --
--- >> KURULUM <<
--- 1. Turtle'ı Y=12 seviyesine yerleştirin.
--- 2. Ana sandığı turtle'ın ALTINA koyun.
--- 3. Envanter:
---    - Slot 1: Meşaleler (Torch)
---    - Slot 15: Yakıt (Kömür/Odun Kömürü)
---    - Slot 16: Yedek sandık
--- 4. 'lua mining.lua' komutuyla script'i çalıştırın.
--- 5. 'main()' yazarak kazı işlemini başlatın.
+-- SETUP TALİMATLARI:
+-- 1. Turtle'ı Y=12 seviyesine yerleştirin (örn: surface'dan 52 blok aşağı)
+-- 2. Home chest'i turtle'ın ALTINA yerleştirin (items buraya aktarılacak)
+-- 3. Inventory setup:
+--    Slot 1: Torch'lar (64 adet önerilir)
+--    Slot 15: Fuel items (coal, wood, charcoal - otomatik kullanılır)
+--    Slot 16: Spare chest (geçici drops için)  
+--    Slot 2-14: Boş (mining loot için)
+-- 4. Script'i çalıştırın: lua mining.lua
+-- 5. Script otomatik olarak:
+--    - 3-kat mining yapacak (Y=11, Y=12, Y=13)
+--    - Torch'ları Y=11'e yerleştirecek (turtle Y=12'de kalır)
+--    - Branch mining pattern başlatacak
+--    - Inventory dolunca home'a dönüp boşaltacak
+--    - Geri dönerken torch'lara ÇARPMAYACAK (farklı seviyede!)
+--    - Mining tamamlandığında tüm items'ları home chest'e aktaracak
 --
--- >> ÖZELLİKLER <<
--- - 3 Katmanlı Kazı (Y=11, 12, 13)
--- - Güvenli Meşale Sistemi (Geri dönerken kırmaz)
--- - Otomatik Envanter ve Yakıt Yönetimi
--- - Eve Dönüş Sistemi
+-- ÖZELLİKLER:
+-- ✅ 2x1 Diamond Level Branch Mining (Y=11-12)
+-- ✅ Smart Torch Placement (geri dönerken engel olmaz)
+-- ✅ Auto Inventory Management (home'a dönüp boşaltır)
+-- ✅ Position Tracking & Return Home System
+-- ✅ Fuel & Lava Safety Controls
+-- ✅ Progress Reporting & Error Handling
 -- ========================================
 
 -- GLOBAL SETTINGS
@@ -177,6 +187,7 @@ function moveForward()
 end
 
 function safeForward(digDown)
+    -- Bu fonksiyon artık sadece blok kırma işlemini yapacak.
     return digTunnelSection(digDown)
 end
 
@@ -195,20 +206,25 @@ function digTunnelSection(digDown)
         end
     end
     
-    -- 3 kat mining için alt bloku da kaz (Y=11) - ama önce güvenlik kontrolü
+    -- 3 kat mining için alt bloku da kaz (Y=11)
     if CONFIG.TUNNEL_HEIGHT >= 3 and digDown then
-        if turtle.detectDown() then
-            local success, data = turtle.inspectDown()
-            if success and data.name then
-                if string.find(data.name, "lava") or string.find(data.name, "water") then
-                    log("🚨 TEHLIKE: " .. data.name .. " tespit edildi Y=" .. (pos.y - 1) .. " seviyesinde!")
-                    return false -- Lava/water tespit edilirse mining durdur
+        -- GÜVENLİK: Eğer başlangıç pozisyonundaysak, alt bloğu (sandığı) kazma!
+        if pos.x == home_pos.x and pos.y == home_pos.y and pos.z == home_pos.z then
+            log("🛡️ Başlangıç pozisyonu, alt blok (sandık) kazılmadı.")
+        else
+            if turtle.detectDown() then
+                local success, data = turtle.inspectDown()
+                if success and data.name then
+                    if string.find(data.name, "lava") or string.find(data.name, "water") then
+                        log("🚨 TEHLIKE: " .. data.name .. " tespit edildi Y=" .. (pos.y - 1) .. " seviyesinde!")
+                        return false
+                    end
                 end
-            end
-            -- Güvenliyse alt bloku kaz (Y=11)
-            while turtle.detectDown() do
-                turtle.digDown()
-                sleep(0.1)
+                -- Güvenliyse alt bloku kaz (Y=11)
+                while turtle.detectDown() do
+                    turtle.digDown()
+                    sleep(0.1)
+                end
             end
         end
     end
@@ -476,20 +492,24 @@ function mineForward(steps, place_torches)
                 return false
             end
         end
-        -- 1. Önce blokları kır (ve alt blok)
+
+        -- 1. Önce blokları kır
         if not safeForward(place_torches) then
             log("❌ Güvenlik riski nedeniyle mining durduruluyor")
             return false
         end
-        -- 2. Torch koyulacaksa, torchu koy (henüz ilerlemeden!)
+
+        -- 2. Sonra, ilerlemeden ÖNCE torch koy
         if place_torches then
             placeGroundTorch(step)
         end
-        -- 3. Sonra bir adım ileri git
+
+        -- 3. En son ilerle
         if not moveForward() then
             log("❌ İleri hareket başarısız")
             return false
         end
+
         if step % 10 == 0 then
             log("🔨 Mining: " .. step .. "/" .. steps .. " blocks")
         end
@@ -624,5 +644,5 @@ function main()
     log("🎉 Mining işlemi tamamlandı!")
 end
 
--- Script'i Başlat
+-- SCRIPT'İ BAŞLAT
 main()
