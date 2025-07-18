@@ -993,20 +993,9 @@ print("   Her 'main()' komutu yeni bir alan kazacak ve otomatik genişleyecek.")
 -- ========================================
 
 print()
-print("🔥 DIAMOND HUNTER PRO OTOMATİK BAŞLATIYOR...")
-print("⚡ 3 saniye içinde mining başlayacak!")
-print("💡 Durdurmak için Ctrl+T basın")
-print()
-
--- 3 saniye bekle, kullanıcı durdurma şansı versin
-for i = 3, 1, -1 do
-    print("🚀 Başlatma: " .. i .. " saniye...")
-    sleep(1)
-end
-
-print()
+print("�� DIAMOND HUNTER PRO BAŞLATIYOR...")
 print("💎 DIAMOND MINING BAŞLIYOR!")
 print("=============================")
 
--- Otomatik olarak main() fonksiyonunu çağır
+-- Direkt main() fonksiyonunu çağır
 main()
