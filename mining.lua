@@ -146,6 +146,7 @@ function dropItems()
   turnAround()
   
   -- Check if chest is available
+  turnAround()
   local success, data = turtle.inspect()
   if not success or not string.find(data.name or "", "chest") then
     log("WARNING: No chest detected behind turtle!")
