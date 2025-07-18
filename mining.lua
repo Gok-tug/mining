@@ -169,34 +169,28 @@ function getDistanceToHome()
     return dx + dy + dz -- Manhattan distance
 end
 
-function safeForward()
-    -- Önce tünel yüksekliğine göre tüm blokları kaz
-    if not digTunnelSection() then
-        log("🚨 Güvenlik riski tespit edildi, mining durduruluyor!")
-        return false
-    end
-    
-    -- Sonra ilerle
+function moveForward()
     while not turtle.forward() do
         if turtle.detect() then
             turtle.dig()
         else
-            turtle.attack() -- Mob saldırısı
+            turtle.attack()
         end
         sleep(0.1)
     end
-    
-    -- Position update based on direction
     if direction == NORTH then updatePosition(0, 0, -1)
     elseif direction == EAST then updatePosition(1, 0, 0)
     elseif direction == SOUTH then updatePosition(0, 0, 1)
     elseif direction == WEST then updatePosition(-1, 0, 0)
     end
-    
     return true
 end
 
-function digTunnelSection()
+function safeForward(digDown)
+    return digTunnelSection(digDown)
+end
+
+function digTunnelSection(digDown)
     -- Önce önündeki bloku kaz (Y=12 - turtle seviyesi)
     while turtle.detect() do
         turtle.dig()
@@ -212,7 +206,7 @@ function digTunnelSection()
     end
     
     -- 3 kat mining için alt bloku da kaz (Y=11) - ama önce güvenlik kontrolü
-    if CONFIG.TUNNEL_HEIGHT >= 3 then
+    if CONFIG.TUNNEL_HEIGHT >= 3 and digDown then
         if turtle.detectDown() then
             local success, data = turtle.inspectDown()
             if success and data.name then
@@ -221,7 +215,6 @@ function digTunnelSection()
                     return false -- Lava/water tespit edilirse mining durdur
                 end
             end
-            
             -- Güvenliyse alt bloku kaz (Y=11)
             while turtle.detectDown() do
                 turtle.digDown()
@@ -482,59 +475,49 @@ end
 
 function mineForward(steps, place_torches)
     place_torches = place_torches or false
-    
     for step = 1, steps do
-        -- Fuel kontrolü
         if not checkFuel() then
             log("⛽ Fuel azaldı, mining durduruluyor")
             return false
         end
-        
-        -- Inventory kontrolü
         if isInventoryFull() then
             log("🎒 Inventory dolu, items boşaltılıyor")
             if not dropItems() then
                 return false
             end
         end
-        
-        -- İleri git ve kaz (digTunnelSection dahil)
-        if not safeForward() then
+        -- 1. Önce blokları kır (ve alt blok)
+        if not safeForward(place_torches) then
             log("❌ Güvenlik riski nedeniyle mining durduruluyor")
             return false
         end
-        
-        -- Zemin torch yerleştir (basit ve etkili!)
+        -- 2. Torch koyulacaksa, torchu koy (henüz ilerlemeden!)
         if place_torches then
             placeGroundTorch(step)
         end
-        
-        -- Progress göster
+        -- 3. Sonra bir adım ileri git
+        if not moveForward() then
+            log("❌ İleri hareket başarısız")
+            return false
+        end
         if step % 10 == 0 then
             log("🔨 Mining: " .. step .. "/" .. steps .. " blocks")
         end
     end
-    
     return true
 end
 
 function mineBranch(length, return_back)
     if return_back == nil then return_back = true end
-    
     log("🌿 Yan dal kazılıyor: " .. length .. " blok")
-    
-    -- Dalı kaz
     if not mineForward(length, true) then
         return false
     end
-    
-    -- Geri dön
     if return_back then
         turnAround()
-        mineForward(length, false) -- Geri dönerken torch yerleştirme
-        turnAround() -- Orijinal yöne dön
+        mineForward(length, false) -- Geri dönerken torch ve alt blok kazma yok
+        turnAround()
     end
-    
     return true
 end
 
