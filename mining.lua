@@ -1,11 +1,12 @@
--- Advanced Diamond Mining Program - Fixed Version
+-- Advanced Diamond Mining Program - Complete Fixed Version
 -- Settings
 local tunnelLength = 50      -- Length of each tunnel
 local tunnelCount = 20       -- Total number of tunnels
 local spacing = 2            -- Spacing between tunnels (2 is ideal)
 local fuelSlot = 1          -- Slot for fuel (coal/charcoal)
 local torchSlot = 15        -- Slot for torches
-local cobbleSlot = 16       -- Slot for cobblestone (lava protection)
+local cobbleSlot = 16       -- Slot for cobblestone (lava protection + torch support)
+local torchInterval = 10     -- Place torch every X blocks
 
 -- Position tracking
 local currentX = 0
@@ -17,7 +18,13 @@ local facing = 0  -- 0=North, 1=East, 2=South, 3=West
 local totalBlocksMined = 0
 local totalDiamonds = 0
 local currentTunnel = 0
-local currentStep = 0  -- For resume functionality
+local currentStep = 0
+local stuckCounter = 0
+local lastPosition = {x = 0, y = 0, z = 0}
+
+-- Recovery system
+local maxStuckAttempts = 20
+local emergencyFuelReserve = 100
 
 -- Utility Functions
 function log(message)
@@ -51,7 +58,6 @@ function checkFuel(requiredFuel)
     log("Fuel low (" .. currentFuel .. "/" .. requiredFuel .. "), refueling...")
     turtle.select(fuelSlot)
     
-    -- Try to refuel multiple times if needed
     local attempts = 0
     while turtle.getFuelLevel() < requiredFuel and turtle.getItemCount(fuelSlot) > 0 and attempts < 10 do
       if not turtle.refuel(1) then
@@ -71,38 +77,127 @@ function checkFuel(requiredFuel)
   return true
 end
 
--- Improved fuel calculation
 function calculateRequiredFuel()
-  local fuelPerTunnel = (tunnelLength * 2) + -- Forward + backward
-                       (spacing * 2) +        -- Movement between tunnels
-                       30                     -- Safety margin per tunnel
-  local totalFuel = fuelPerTunnel * tunnelCount + 500 -- Large safety margin
+  local fuelPerTunnel = (tunnelLength * 2) + (spacing * 2) + 50
+  local totalFuel = fuelPerTunnel * tunnelCount + emergencyFuelReserve
   return totalFuel
 end
 
--- Safe movement with better obstacle handling
-function safeForward()
-  local attempts = 0
-  while not turtle.forward() and attempts < 10 do
-    if turtle.detect() then
-      local success, data = turtle.inspect()
-      -- Check if it's a torch and skip it
-      if success and data.name and string.find(data.name, "torch") then
-        log("Torch detected ahead, cannot proceed")
-        return false
-      end
-      turtle.dig()
-      os.sleep(0.1)
-    else
-      -- Something is blocking but not a block (maybe a mob)
-      log("Warning: Movement blocked by non-block entity")
-      os.sleep(0.5)
-    end
-    attempts = attempts + 1
+-- Position tracking and stuck detection
+function updatePosition()
+  lastPosition.x = currentX
+  lastPosition.y = currentY
+  lastPosition.z = currentZ
+end
+
+function checkIfStuck()
+  if currentX == lastPosition.x and currentY == lastPosition.y and currentZ == lastPosition.z then
+    stuckCounter = stuckCounter + 1
+    log("Warning: Stuck detection - attempt " .. stuckCounter)
+    return stuckCounter >= 3
+  else
+    stuckCounter = 0
+    return false
+  end
+end
+
+-- Advanced obstacle handling
+function identifyBlockType(direction)
+  local success, data
+  
+  if direction == "forward" then
+    success, data = turtle.inspect()
+  elseif direction == "up" then
+    success, data = turtle.inspectUp()
+  elseif direction == "down" then
+    success, data = turtle.inspectDown()
   end
   
-  if attempts >= 10 then
-    log("ERROR: Cannot move forward after 10 attempts!")
+  if not success or not data.name then
+    return "empty"
+  end
+  
+  local blockName = data.name:lower()
+  
+  if string.find(blockName, "torch") then
+    return "torch"
+  elseif string.find(blockName, "lava") then
+    return "lava"
+  elseif string.find(blockName, "water") then
+    return "water"
+  elseif string.find(blockName, "bedrock") then
+    return "bedrock"
+  elseif string.find(blockName, "chest") then
+    return "chest"
+  elseif string.find(blockName, "ore") then
+    return "ore"
+  else
+    return "block"
+  end
+end
+
+-- Smart movement with obstacle bypass
+function smartForward()
+  updatePosition()
+  
+  local attempts = 0
+  while not turtle.forward() and attempts < maxStuckAttempts do
+    local blockType = identifyBlockType("forward")
+    
+    log("Obstacle detected: " .. blockType)
+    
+    if blockType == "torch" then
+      log("Torch detected - attempting bypass")
+      if not bypassTorch() then
+        log("Cannot bypass torch, digging it")
+        turtle.dig()
+      end
+      
+    elseif blockType == "lava" then
+      log("LAVA! Attempting to contain")
+      if not handleLava() then
+        log("Cannot handle lava safely")
+        return false
+      end
+      
+    elseif blockType == "bedrock" then
+      log("Bedrock detected - cannot proceed")
+      return false
+      
+    elseif blockType == "chest" then
+      log("Chest detected - will not dig")
+      return false
+      
+    elseif blockType == "water" then
+      log("Water detected - filling with cobblestone")
+      turtle.select(cobbleSlot)
+      turtle.place()
+      turtle.select(fuelSlot)
+      
+    elseif blockType == "block" or blockType == "ore" then
+      turtle.dig()
+      os.sleep(0.1)
+      
+    else
+      -- Unknown obstacle - might be mob or item
+      log("Unknown obstacle - waiting and retrying")
+      os.sleep(0.5)
+    end
+    
+    attempts = attempts + 1
+    
+    -- Emergency stuck handling
+    if attempts > 5 and checkIfStuck() then
+      log("STUCK! Attempting emergency bypass")
+      if not emergencyBypass() then
+        log("Emergency bypass failed")
+        return false
+      end
+    end
+  end
+  
+  if attempts >= maxStuckAttempts then
+    log("ERROR: Cannot move forward after " .. maxStuckAttempts .. " attempts!")
     return false
   end
   
@@ -116,25 +211,194 @@ function safeForward()
   return true
 end
 
--- Safe backward movement
-function safeBackward()
+-- Torch bypass system
+function bypassTorch()
+  log("Attempting to bypass torch...")
+  
+  -- Try going around the torch
+  -- Method 1: Go up and around
+  if not turtle.detectUp() then
+    if turtle.up() then
+      currentY = currentY + 1
+      if turtle.forward() then
+        if facing == 0 then currentZ = currentZ - 1
+        elseif facing == 1 then currentX = currentX + 1
+        elseif facing == 2 then currentZ = currentZ + 1
+        elseif facing == 3 then currentX = currentX - 1
+        end
+        
+        if turtle.down() then
+          currentY = currentY - 1
+          log("Successfully bypassed torch by going over")
+          return true
+        end
+      end
+      turtle.down()
+      currentY = currentY - 1
+    end
+  end
+  
+  -- Method 2: Go down and around
+  if not turtle.detectDown() then
+    if turtle.down() then
+      currentY = currentY - 1
+      if turtle.forward() then
+        if facing == 0 then currentZ = currentZ - 1
+        elseif facing == 1 then currentX = currentX + 1
+        elseif facing == 2 then currentZ = currentZ + 1
+        elseif facing == 3 then currentX = currentX - 1
+        end
+        
+        if turtle.up() then
+          currentY = currentY + 1
+          log("Successfully bypassed torch by going under")
+          return true
+        end
+      end
+      turtle.up()
+      currentY = currentY + 1
+    end
+  end
+  
+  log("Cannot bypass torch - will need to dig")
+  return false
+end
+
+-- Emergency bypass when completely stuck
+function emergencyBypass()
+  log("Executing emergency bypass procedure...")
+  
+  -- Try all possible escape routes
+  local originalFacing = facing
+  
+  -- Try turning and going sideways
+  for i = 1, 4 do
+    turnRight()
+    if turtle.forward() then
+      log("Emergency bypass: moved sideways")
+      -- Try to get back on track
+      turnLeft()
+      if turtle.forward() then
+        log("Emergency bypass successful")
+        return true
+      end
+      turnRight()
+      turtle.back()
+    end
+  end
+  
+  -- Reset to original facing
+  while facing ~= originalFacing do
+    turnRight()
+  end
+  
+  -- Try vertical escape
+  if turtle.up() then
+    currentY = currentY + 1
+    if turtle.forward() then
+      turtle.down()
+      currentY = currentY - 1
+      log("Emergency bypass: used vertical escape")
+      return true
+    end
+    turtle.down()
+    currentY = currentY - 1
+  end
+  
+  -- Last resort: dig everything around
+  log("Last resort: digging escape route")
+  turtle.dig()
+  turtle.digUp()
+  turtle.digDown()
+  turnLeft()
+  turtle.dig()
+  turnRight()
+  turnRight()
+  turtle.dig()
+  turnLeft()
+  
+  if turtle.forward() then
+    log("Emergency escape successful")
+    return true
+  end
+  
+  log("Emergency bypass failed - turtle is completely stuck")
+  return false
+end
+
+-- Enhanced lava handling
+function handleLava()
+  log("Handling lava encounter...")
+  
+  turtle.select(cobbleSlot)
+  if turtle.getItemCount(cobbleSlot) > 0 then
+    if turtle.place() then
+      log("Placed cobblestone against lava")
+      turtle.select(fuelSlot)
+      return true
+    end
+  end
+  
+  -- Try other non-valuable blocks
+  for slot = 2, 14 do
+    turtle.select(slot)
+    if turtle.getItemCount(slot) > 0 then
+      local item = turtle.getItemDetail()
+      if item and not isValuableItem(item.name) then
+        if turtle.place() then
+          log("Placed " .. item.name .. " against lava")
+          turtle.select(fuelSlot)
+          return true
+        end
+      end
+    end
+  end
+  
+  log("No blocks available to handle lava")
+  turtle.select(fuelSlot)
+  return false
+end
+
+function isValuableItem(itemName)
+  local valuableItems = {"diamond", "gold", "emerald", "iron", "coal", "redstone"}
+  for _, valuable in ipairs(valuableItems) do
+    if string.find(itemName:lower(), valuable) then
+      return true
+    end
+  end
+  return false
+end
+
+-- Smart backward movement
+function smartBackward()
+  updatePosition()
+  
   local attempts = 0
   while not turtle.back() and attempts < 10 do
     turnAround()
-    if turtle.detect() then
-      local success, data = turtle.inspect()
-      -- Don't dig torches when going backward
-      if success and data.name and not string.find(data.name, "torch") then
+    local blockType = identifyBlockType("forward")
+    
+    if blockType == "torch" then
+      log("Torch behind - attempting to bypass")
+      if not bypassTorch() then
         turtle.dig()
       end
+    elseif blockType ~= "empty" then
+      turtle.dig()
     end
+    
     turnAround()
     attempts = attempts + 1
     os.sleep(0.1)
   end
   
   if attempts >= 10 then
-    log("ERROR: Cannot move backward after 10 attempts!")
+    log("Cannot move backward - trying alternative")
+    turnAround()
+    if smartForward() then
+      turnAround()
+      return true
+    end
     return false
   end
   
@@ -148,9 +412,9 @@ function safeBackward()
   return true
 end
 
--- Advanced inventory management
+-- Inventory management
 function isInventoryFull()
-  for slot = 2, 14 do -- Leave slots 15,16 for torches and cobble
+  for slot = 2, 14 do
     if turtle.getItemCount(slot) == 0 then
       return false
     end
@@ -180,21 +444,19 @@ function countValuableItems()
   return diamonds, gold, iron
 end
 
--- Fixed item dropping system
+-- Enhanced item dropping with recovery
 function dropItems()
   log("Returning to base to drop items...")
   
-  -- Turn around to face the chest
   turnAround()
   
-  -- Check if chest is available behind us
   local success, data = turtle.inspect()
   local hasChest = success and data.name and string.find(data.name, "chest")
   
   if hasChest then
     log("Chest detected, dropping items...")
   else
-    log("WARNING: No chest detected behind turtle! Dropping on ground...")
+    log("WARNING: No chest detected! Dropping on ground...")
   end
   
   local itemsDropped = 0
@@ -209,7 +471,13 @@ function dropItems()
           diamondsDropped = diamondsDropped + item.count
         end
         log("Dropping: " .. item.name .. " x" .. item.count)
-        turtle.drop()
+        
+        -- Try multiple drop methods
+        if not turtle.drop() then
+          if not turtle.dropUp() then
+            turtle.dropDown()
+          end
+        end
         itemsDropped = itemsDropped + 1
       end
     end
@@ -221,54 +489,89 @@ function dropItems()
   end
   
   turtle.select(fuelSlot)
-  
-  -- Turn back to mining direction
   turnAround()
 end
 
--- Lava detection and protection
-function checkForLava()
-  local success, data = turtle.inspect()
-  if success and data.name and string.find(data.name, "lava") then
-    log("LAVA DETECTED! Attempting to place protective block...")
+-- Smart torch placement
+function placeTorchSmart()
+  log("Attempting smart torch placement...")
+  
+  -- Priority 1: Ceiling
+  if turtle.detectUp() then
+    if turtle.placeUp() then
+      log("Torch placed on ceiling")
+      return true
+    end
+  end
+  
+  -- Priority 2: Walls
+  local directions = {"left", "right", "back"}
+  for _, direction in ipairs(directions) do
+    if direction == "left" then
+      turnLeft()
+    elseif direction == "right" then
+      turnRight()
+    elseif direction == "back" then
+      turnAround()
+    end
     
-    -- First try cobblestone slot
-    turtle.select(cobbleSlot)
-    if turtle.getItemCount(cobbleSlot) > 0 then
+    if turtle.detect() then
       if turtle.place() then
-        log("Placed cobblestone against lava")
-        turtle.select(fuelSlot)
+        log("Torch placed on " .. direction .. " wall")
+        -- Return to original facing
+        if direction == "left" then
+          turnRight()
+        elseif direction == "right" then
+          turnLeft()
+        elseif direction == "back" then
+          turnAround()
+        end
         return true
       end
     end
     
-    -- If no cobblestone, try other non-valuable slots
-    for slot = 2, 14 do
-      turtle.select(slot)
-      if turtle.getItemCount(slot) > 0 then
-        local item = turtle.getItemDetail()
-        if item and not string.find(item.name, "ore") and 
-           not string.find(item.name, "gem") and 
-           not string.find(item.name, "diamond") and
-           not string.find(item.name, "gold") and
-           not string.find(item.name, "emerald") then
-          if turtle.place() then
-            log("Placed " .. item.name .. " against lava")
-            turtle.select(fuelSlot)
-            return true
-          end
-        end
+    -- Return to original facing
+    if direction == "left" then
+      turnRight()
+    elseif direction == "right" then
+      turnLeft()
+    elseif direction == "back" then
+      turnAround()
+    end
+  end
+  
+  -- Priority 3: Floor
+  if turtle.detectDown() then
+    if turtle.placeDown() then
+      log("Torch placed on floor")
+      return true
+    end
+  end
+  
+  -- Priority 4: Create surface with cobblestone
+  if turtle.getItemCount(cobbleSlot) > 0 then
+    local originalSlot = turtle.getSelectedSlot()
+    turtle.select(cobbleSlot)
+    
+    if turtle.placeUp() then
+      turtle.select(torchSlot)
+      if turtle.placeUp() then
+        log("Placed cobblestone support and torch on ceiling")
+        turtle.select(originalSlot)
+        return true
+      else
+        turtle.digUp()  -- Remove cobblestone if torch failed
       end
     end
     
-    log("CRITICAL: No suitable blocks available to place against lava!")
-    turtle.select(fuelSlot)
-    return false
+    turtle.select(originalSlot)
   end
-  return true
+  
+  log("Could not place torch - no suitable surface")
+  return false
 end
 
--- Enhanced mining with torch placement on top
+-- Enhanced tunnel digging with recovery
 function digTunnel(resumeFromStep)
   local startStep = resumeFromStep or 1
   local blocksMinedThisTunnel = 0
@@ -279,110 +582,141 @@ function digTunnel(resumeFromStep)
   for step = startStep, tunnelLength do
     currentStep = step
     
-    -- Check fuel before each step
-    if not checkFuel(tunnelLength - step + 20) then
+    -- Fuel check
+    if not checkFuel(tunnelLength - step + 30) then
       log("Insufficient fuel, stopping tunnel at step " .. step)
       return "fuel_low", step
     end
     
-    -- Check inventory space
+    -- Inventory check
     if isInventoryFull() then
-      log("Inventory full at step " .. step .. " of tunnel")
+      log("Inventory full at step " .. step)
       return "inventory_full", step
     end
     
-    -- Check for lava before proceeding
-    if not checkForLava() then
-      log("Lava encountered, stopping tunnel for safety")
-      return "lava_danger", step
-    end
+    -- Mining sequence with error handling
+    local miningSuccess = true
     
-    -- Mine blocks above and below (3-high tunnel)
+    -- Mine up
     if turtle.detectUp() then
-      turtle.digUp()
-      blocksMinedThisTunnel = blocksMinedThisTunnel + 1
+      local blockType = identifyBlockType("up")
+      if blockType ~= "bedrock" then
+        if turtle.digUp() then
+          blocksMinedThisTunnel = blocksMinedThisTunnel + 1
+        end
+      end
     end
     
+    -- Mine down
     if turtle.detectDown() then
-      turtle.digDown()
-      blocksMinedThisTunnel = blocksMinedThisTunnel + 1
+      local blockType = identifyBlockType("down")
+      if blockType ~= "bedrock" then
+        if turtle.digDown() then
+          blocksMinedThisTunnel = blocksMinedThisTunnel + 1
+        end
+      end
     end
     
     -- Mine forward
-    while turtle.detect() do
-      turtle.dig()
-      blocksMinedThisTunnel = blocksMinedThisTunnel + 1
+    local forwardAttempts = 0
+    while turtle.detect() and forwardAttempts < 10 do
+      local blockType = identifyBlockType("forward")
+      if blockType == "bedrock" then
+        log("Bedrock ahead - cannot proceed")
+        return "bedrock_blocked", step
+      elseif blockType == "lava" then
+        if not handleLava() then
+          return "lava_danger", step
+        end
+      else
+        if turtle.dig() then
+          blocksMinedThisTunnel = blocksMinedThisTunnel + 1
+        end
+      end
+      forwardAttempts = forwardAttempts + 1
       os.sleep(0.1)
     end
     
-    -- Move forward
-    if not safeForward() then
-      log("Cannot move forward, stopping tunnel")
+    -- Move forward with smart movement
+    if not smartForward() then
+      log("Cannot move forward at step " .. step)
       return "movement_blocked", step
     end
     
-    -- Place torch every 8 blocks ON TOP (this prevents torch collision on return)
-    if step % 10 == 0 then
+    -- Torch placement
+    if step % torchInterval == 0 then
       turtle.select(torchSlot)
       if turtle.getItemCount(torchSlot) > 0 then
-        if turtle.placeUp() then
-          log("Placed torch above at step " .. step)
-        else
-          log("Could not place torch above at step " .. step)
-        end
-      else
-        log("No torches available for lighting")
+        placeTorchSmart()
       end
       turtle.select(fuelSlot)
+    end
+    
+    -- Progress report every 10 steps
+    if step % 10 == 0 then
+      log("Progress: " .. step .. "/" .. tunnelLength .. " blocks")
     end
   end
   
   totalBlocksMined = totalBlocksMined + blocksMinedThisTunnel
-  currentStep = 0  -- Reset step counter
+  currentStep = 0
   log("Tunnel completed. Mined " .. blocksMinedThisTunnel .. " blocks")
   return "completed", tunnelLength
 end
 
--- Smart return to starting position
+-- Enhanced return to tunnel start
 function returnToTunnelStart()
   log("Returning to tunnel start...")
   turnAround()
   
   local stepsToReturn = currentStep > 0 and currentStep or tunnelLength
+  local returnSuccess = true
   
   for step = 1, stepsToReturn do
-    if not safeBackward() then
-      log("Using forward movement for return...")
-      if not safeForward() then
-        log("Warning: Could not return to exact start position")
+    if not smartBackward() then
+      log("Backward movement failed, trying forward approach")
+      if not smartForward() then
+        log("Warning: Could not return to exact start - step " .. step)
+        returnSuccess = false
         break
       end
+    end
+    
+    if step % 10 == 0 then
+      log("Return progress: " .. step .. "/" .. stepsToReturn)
     end
   end
   
   turnAround()
-  log("Returned to tunnel start")
+  
+  if returnSuccess then
+    log("Successfully returned to tunnel start")
+  else
+    log("Return completed with issues")
+  end
+  
+  return returnSuccess
 end
 
--- Move to next tunnel position
+-- Move to next tunnel
 function moveToNextTunnel()
   log("Moving to next tunnel position...")
   
-  if not checkFuel(spacing + 10) then
+  if not checkFuel(spacing + 20) then
     return false
   end
   
   turnRight()
   for step = 1, spacing do
-    if not safeForward() then
+    if not smartForward() then
       log("ERROR: Cannot move to next tunnel position")
-      turnLeft()  -- Return to original facing
+      turnLeft()
       return false
     end
   end
   turnLeft()
   
-  log("Moved to next tunnel position")
+  log("Successfully moved to next tunnel")
   return true
 end
 
@@ -390,16 +724,17 @@ end
 function emergencyReturn()
   log("EMERGENCY: Attempting to return to base...")
   
-  -- Simple approach: turn around and go back
   turnAround()
-  local maxSteps = tunnelLength + (currentTunnel * spacing)
+  local maxSteps = tunnelLength + (currentTunnel * spacing) + 50
   
   for i = 1, maxSteps do
-    if not turtle.forward() then
-      if turtle.detect() then
-        turtle.dig()
-      end
-      turtle.forward()
+    if not smartForward() then
+      log("Emergency return blocked at step " .. i)
+      break
+    end
+    
+    if i % 20 == 0 then
+      log("Emergency return progress: " .. i .. "/" .. maxSteps)
     end
   end
   
@@ -408,32 +743,29 @@ end
 
 -- Main Program
 function main()
-  log("=== Advanced Diamond Mining Program - Fixed Version ===")
+  log("=== Advanced Diamond Mining Program - Complete Version ===")
   log("Configuration: " .. tunnelCount .. " tunnels, " .. tunnelLength .. " blocks each")
-  log("Torches will be placed ABOVE to prevent collision on return")
+  log("Torch interval: " .. torchInterval .. " blocks")
+  log("Features: Smart obstacle detection, torch bypass, stuck recovery")
   
-  -- Initial fuel check
+  -- Initial checks
   local requiredFuel = calculateRequiredFuel()
   log("Estimated fuel requirement: " .. requiredFuel)
   
   if not checkFuel(requiredFuel) then
     log("CRITICAL: Insufficient fuel for operation!")
-    log("Current fuel: " .. turtle.getFuelLevel() .. ", Required: " .. requiredFuel)
     return false
   end
   
-  -- Check initial supplies
+  -- Supply check
   turtle.select(torchSlot)
   local torchCount = turtle.getItemCount(torchSlot)
-  if torchCount < tunnelCount * (tunnelLength / 8) then
-    log("WARNING: May not have enough torches! Current: " .. torchCount)
-  end
+  local requiredTorches = tunnelCount * math.ceil(tunnelLength / torchInterval)
+  log("Torches: " .. torchCount .. "/" .. requiredTorches .. " (required)")
   
   turtle.select(cobbleSlot)
-  local cobbleCount = turtle.getItemCount(cobbleSlot)
-  log("Cobblestone for lava protection: " .. cobbleCount)
+  log("Cobblestone for protection: " .. turtle.getItemCount(cobbleSlot))
   
-  -- Select fuel slot
   turtle.select(fuelSlot)
   
   -- Main mining loop
@@ -443,52 +775,49 @@ function main()
     
     local result, lastStep = digTunnel()
     
-    -- Handle different tunnel results
     if result == "completed" then
-      returnToTunnelStart()
-      dropItems()
-      
-      -- Count valuable items after dropping
-      local diamonds, gold, iron = countValuableItems()
-      totalDiamonds = totalDiamonds + diamonds
-      
-      log("Tunnel #" .. tunnelNum .. " completed successfully")
-      log("Session diamonds found: " .. totalDiamonds)
+      if returnToTunnelStart() then
+        dropItems()
+        local diamonds, gold, iron = countValuableItems()
+        totalDiamonds = totalDiamonds + diamonds
+        log("Tunnel #" .. tunnelNum .. " completed successfully")
+        log("Session diamonds: " .. totalDiamonds)
+      else
+        log("Return failed, attempting emergency procedures")
+        emergencyReturn()
+        dropItems()
+      end
       
     elseif result == "inventory_full" then
-      log("Inventory full, returning to base to drop items")
+      log("Inventory full, managing and resuming...")
       returnToTunnelStart()
       dropItems()
       
-      -- Resume tunnel from where we left off
       if lastStep < tunnelLength then
-        log("Resuming tunnel #" .. tunnelNum .. " from step " .. (lastStep + 1))
+        log("Resuming tunnel from step " .. (lastStep + 1))
         local resumeResult = digTunnel(lastStep + 1)
-        if resumeResult == "completed" then
-          returnToTunnelStart()
-          dropItems()
-        end
+        returnToTunnelStart()
+        dropItems()
       end
       
     elseif result == "fuel_low" then
-      log("Fuel low, attempting to return to base")
+      log("Fuel critically low")
       returnToTunnelStart()
       dropItems()
       
-      if not checkFuel(requiredFuel / 3) then
-        log("CRITICAL: Cannot continue, insufficient fuel")
-        log("Completed " .. (tunnelNum - 1) .. " full tunnels")
+      if not checkFuel(emergencyFuelReserve) then
+        log("STOPPING: Insufficient fuel to continue safely")
         break
       end
       
-    elseif result == "lava_danger" then
-      log("Lava encountered, skipping to next tunnel for safety")
+    elseif result == "movement_blocked" or result == "bedrock_blocked" then
+      log("Tunnel blocked, skipping to next")
       returnToTunnelStart()
       dropItems()
       
-    elseif result == "movement_blocked" then
-      log("Movement blocked, attempting emergency return")
-      emergencyReturn()
+    elseif result == "lava_danger" then
+      log("Lava danger, aborting tunnel for safety")
+      returnToTunnelStart()
       dropItems()
       
     else
@@ -497,37 +826,34 @@ function main()
       dropItems()
     end
     
-    -- Move to next tunnel position (except for last tunnel)
+    -- Move to next tunnel
     if tunnelNum < tunnelCount then
       if not moveToNextTunnel() then
-        log("Cannot move to next tunnel, stopping program")
+        log("Cannot reach next tunnel position")
         log("Completed " .. tunnelNum .. " tunnels")
         break
       end
     end
     
-    -- Progress report every 5 tunnels
+    -- Progress report
     if tunnelNum % 5 == 0 then
       log("=== Progress Report ===")
-      log("Completed " .. tunnelNum .. "/" .. tunnelCount .. " tunnels")
+      log("Completed: " .. tunnelNum .. "/" .. tunnelCount)
       log("Total blocks mined: " .. totalBlocksMined)
-      log("Total diamonds found: " .. totalDiamonds)
-      log("Current fuel level: " .. turtle.getFuelLevel())
+      log("Total diamonds: " .. totalDiamonds)
+      log("Fuel remaining: " .. turtle.getFuelLevel())
     end
   end
   
-  -- Final statistics
+  -- Final operations
   log("=== Mining Operation Complete ===")
   log("Tunnels completed: " .. currentTunnel)
   log("Total blocks mined: " .. totalBlocksMined)
   log("Total diamonds found: " .. totalDiamonds)
-  log("Final fuel level: " .. turtle.getFuelLevel())
-  log("Final position: X=" .. currentX .. ", Y=" .. currentY .. ", Z=" .. currentZ)
+  log("Final fuel: " .. turtle.getFuelLevel())
   
-  -- Final return to base and drop remaining items
   dropItems()
-  
-  log("Mining program finished successfully!")
+  log("Program finished successfully!")
   return true
 end
 
@@ -535,12 +861,20 @@ end
 function safeMain()
   local success, error = pcall(main)
   if not success then
-    log("ERROR: " .. tostring(error))
-    log("Attempting emergency return to base...")
-    emergencyReturn()
-    dropItems()
+    log("CRITICAL ERROR: " .. tostring(error))
+    log("Executing emergency procedures...")
+    
+    pcall(function()
+      emergencyReturn()
+      dropItems()
+    end)
+    
+    log("Emergency procedures completed")
   end
 end
 
--- Start the program with error handling
+-- Start program
+log("Starting Advanced Diamond Mining Bot...")
+log("Press Ctrl+T to emergency stop if needed")
+os.sleep(3)
 safeMain()
