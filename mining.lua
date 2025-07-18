@@ -350,31 +350,30 @@ function returnToHome()
         -- X ekseni
         if pos.x < home_pos.x then
             faceDirection(EAST)
-            if not safeForward() then return false end
+            if not moveForward() then return false end
         elseif pos.x > home_pos.x then
             faceDirection(WEST) 
-            if not safeForward() then return false end
+            if not moveForward() then return false end
         -- Z ekseni
         elseif pos.z < home_pos.z then
             faceDirection(SOUTH)
-            if not safeForward() then return false end
+            if not moveForward() then return false end
         elseif pos.z > home_pos.z then
             faceDirection(NORTH)
-            if not safeForward() then return false end
+            if not moveForward() then return false end
         -- Y ekseni
         elseif pos.y < home_pos.y then
             safeUp()
         elseif pos.y > home_pos.y then
             safeDown()
         end
-        
-        -- Fuel kontrolü
+
         if not checkFuel() then
             log("⛽ Fuel bitti! Acil durum!")
             return false
         end
     end
-    
+
     log("✅ Home'a varıldı")
     return true
 end
@@ -435,10 +434,10 @@ end
 
 function returnToMiningPosition(target_pos)
     log("⛏️  Mining pozisyonuna dönülüyor...")
-    
+
     local max_steps = 1000
     local steps = 0
-    
+
     -- Target pozisyonuna git
     while pos.x ~= target_pos.x or pos.z ~= target_pos.z or pos.y ~= target_pos.y do
         steps = steps + 1
@@ -449,17 +448,17 @@ function returnToMiningPosition(target_pos)
         -- X ekseni
         if pos.x < target_pos.x then
             faceDirection(EAST)
-            if not safeForward() then return false end
+            if not moveForward() then return false end
         elseif pos.x > target_pos.x then
             faceDirection(WEST)
-            if not safeForward() then return false end
+            if not moveForward() then return false end
         -- Z ekseni  
         elseif pos.z < target_pos.z then
             faceDirection(SOUTH)
-            if not safeForward() then return false end
+            if not moveForward() then return false end
         elseif pos.z > target_pos.z then
             faceDirection(NORTH)
-            if not safeForward() then return false end
+            if not moveForward() then return false end
         -- Y ekseni
         elseif pos.y < target_pos.y then
             safeUp()
@@ -467,10 +466,9 @@ function returnToMiningPosition(target_pos)
             safeDown()
         end
     end
-    
-    -- Orijinal yönüne dön
+
     faceDirection(target_pos.dir)
-    
+
     log("✅ Mining pozisyonuna varıldı")
     return true
 end
