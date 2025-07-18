@@ -1,32 +1,22 @@
 -- ========================================
--- ADVANCED MINING TURTLE SCRIPT v1.0
--- Optimal Branch Mining with Smart Torch System
+-- ADVANCED MINING TURTLE SCRIPT v1.1
 -- ========================================
 --
--- SETUP TALİMATLARI:
--- 1. Turtle'ı Y=12 seviyesine yerleştirin (örn: surface'dan 52 blok aşağı)
--- 2. Home chest'i turtle'ın ALTINA yerleştirin (items buraya aktarılacak)
--- 3. Inventory setup:
---    Slot 1: Torch'lar (64 adet önerilir)
---    Slot 15: Fuel items (coal, wood, charcoal - otomatik kullanılır)
---    Slot 16: Spare chest (geçici drops için)  
---    Slot 2-14: Boş (mining loot için)
--- 4. Script'i çalıştırın: lua mining.lua
--- 5. Script otomatik olarak:
---    - 3-kat mining yapacak (Y=11, Y=12, Y=13)
---    - Torch'ları Y=11'e yerleştirecek (turtle Y=12'de kalır)
---    - Branch mining pattern başlatacak
---    - Inventory dolunca home'a dönüp boşaltacak
---    - Geri dönerken torch'lara ÇARPMAYACAK (farklı seviyede!)
---    - Mining tamamlandığında tüm items'ları home chest'e aktaracak
+-- >> KURULUM <<
+-- 1. Turtle'ı Y=12 seviyesine yerleştirin.
+-- 2. Ana sandığı turtle'ın ALTINA koyun.
+-- 3. Envanter:
+--    - Slot 1: Meşaleler (Torch)
+--    - Slot 15: Yakıt (Kömür/Odun Kömürü)
+--    - Slot 16: Yedek sandık
+-- 4. 'lua mining.lua' komutuyla script'i çalıştırın.
+-- 5. 'main()' yazarak kazı işlemini başlatın.
 --
--- ÖZELLİKLER:
--- ✅ 2x1 Diamond Level Branch Mining (Y=11-12)
--- ✅ Smart Torch Placement (geri dönerken engel olmaz)
--- ✅ Auto Inventory Management (home'a dönüp boşaltır)
--- ✅ Position Tracking & Return Home System
--- ✅ Fuel & Lava Safety Controls
--- ✅ Progress Reporting & Error Handling
+-- >> ÖZELLİKLER <<
+-- - 3 Katmanlı Kazı (Y=11, 12, 13)
+-- - Güvenli Meşale Sistemi (Geri dönerken kırmaz)
+-- - Otomatik Envanter ve Yakıt Yönetimi
+-- - Eve Dönüş Sistemi
 -- ========================================
 
 -- GLOBAL SETTINGS
@@ -634,5 +624,60 @@ function main()
     log("🎉 Mining işlemi tamamlandı!")
 end
 
--- SCRIPT'İ BAŞLAT
-main()
+-- ========================================
+-- >> KULLANICI KONTROL MERKEZİ <<
+-- ========================================
+
+function showFuelStatus()
+    local current = turtle.getFuelLevel()
+    local needed = calculateFuelNeeded()
+    
+    print("----------------------------------------")
+    print("⛽ YAKIT DURUMU:")
+    print("   Mevcut: " .. current)
+    print("   Tahmini İhtiyaç: " .. needed)
+    
+    if current >= needed then
+        print("   >> DURUM: Yeterli Yakıt ✅")
+    else
+        print("   >> DURUM: " .. (needed - current) .. " yakıt daha gerekli ❌")
+        print("   >> ÖNERİ: Slot 15'e kömür koyup 'refuelNow()' yazın.")
+    end
+    print("----------------------------------------")
+end
+
+function refuelNow()
+    local initial = turtle.getFuelLevel()
+    
+    -- Slot 15'teki itemları kullan
+    if selectItem(CONFIG.FUEL_SLOT) then
+        turtle.refuel()
+    end
+    
+    -- Envanterdeki diğer yakıtları bul ve kullan
+    for slot = 2, 16 do
+        if turtle.getItemCount(slot) > 0 then
+            turtle.select(slot)
+            local success, data = turtle.getItemDetail()
+            if success and data.name and (string.find(data.name, "coal") or string.find(data.name, "wood") or string.find(data.name, "log") or string.find(data.name, "plank") or string.find(data.name, "charcoal")) then
+                turtle.refuel()
+            end
+        end
+    end
+    
+    local gained = turtle.getFuelLevel() - initial
+    print("----------------------------------------")
+    print("⛽ " .. gained .. " yakıt eklendi.")
+    print("📊 Yeni Toplam Yakıt: " .. turtle.getFuelLevel())
+    print("----------------------------------------")
+end
+
+print("========================================")
+print("   ADVANCED MINING TURTLE v1.1")
+print("========================================")
+print("Talimatlar:")
+print("1. 'refuelNow()' -> Yakıt doldurur.")
+print("2. 'showFuelStatus()' -> Yakıt durumunu gösterir.")
+print("3. 'main()' -> Kazı işlemini başlatır.")
+print("----------------------------------------")
+print("Hazır olduğunuzda 'main()' yazın.")
