@@ -54,6 +54,178 @@ local home_pos = {x = 0, y = 0, z = 0}
 local mining_path = {} -- Mining rotası kayıt
 
 -- ========================================
+-- DIAMOND HUNTER PRO SYSTEM
+-- ========================================
+
+local DIAMOND_HUNTER = {
+    state_file = "diamond_hunter_state.dat",
+    diamond_log = "diamond_locations.dat",
+    current_area = {x = 0, z = 0},
+    mined_areas = {},
+    diamond_locations = {},
+    diamonds_found_this_session = 0
+}
+
+function loadDiamondHunterState()
+    -- Önceki mining durumunu yükle
+    if fs.exists(DIAMOND_HUNTER.state_file) then
+        local file = fs.open(DIAMOND_HUNTER.state_file, "r")
+        if file then
+            local data = file.readAll()
+            file.close()
+            
+            if data and data ~= "" then
+                local state = textutils.unserialize(data)
+                if state then
+                    DIAMOND_HUNTER.current_area = state.current_area or {x = 0, z = 0}
+                    DIAMOND_HUNTER.mined_areas = state.mined_areas or {}
+                    log("📂 Önceki mining durumu yüklendi")
+                    log("🏗️ Mevcut alan: X=" .. DIAMOND_HUNTER.current_area.x .. ", Z=" .. DIAMOND_HUNTER.current_area.z)
+                    log("📊 Toplam kazılmış alan sayısı: " .. #DIAMOND_HUNTER.mined_areas)
+                    return true
+                end
+            end
+        end
+    end
+    log("🆕 Yeni Diamond Hunter Pro session başlatılıyor")
+    return false
+end
+
+function saveDiamondHunterState()
+    -- Mining durumunu kaydet
+    local state = {
+        current_area = DIAMOND_HUNTER.current_area,
+        mined_areas = DIAMOND_HUNTER.mined_areas,
+        last_update = os.time()
+    }
+    
+    local file = fs.open(DIAMOND_HUNTER.state_file, "w")
+    if file then
+        file.write(textutils.serialize(state))
+        file.close()
+        return true
+    end
+    return false
+end
+
+function loadDiamondLocations()
+    -- Diamond lokasyonlarını yükle
+    if fs.exists(DIAMOND_HUNTER.diamond_log) then
+        local file = fs.open(DIAMOND_HUNTER.diamond_log, "r")
+        if file then
+            local data = file.readAll()
+            file.close()
+            
+            if data and data ~= "" then
+                local diamonds = textutils.unserialize(data)
+                if diamonds then
+                    DIAMOND_HUNTER.diamond_locations = diamonds
+                    log("💎 Önceki diamond kayıtları yüklendi: " .. #diamonds .. " lokasyon")
+                    return true
+                end
+            end
+        end
+    end
+    DIAMOND_HUNTER.diamond_locations = {}
+    return false
+end
+
+function saveDiamondLocation(x, y, z)
+    -- Yeni diamond lokasyonunu kaydet
+    local diamond_loc = {
+        x = x, y = y, z = z,
+        area_x = DIAMOND_HUNTER.current_area.x,
+        area_z = DIAMOND_HUNTER.current_area.z,
+        timestamp = os.time()
+    }
+    
+    table.insert(DIAMOND_HUNTER.diamond_locations, diamond_loc)
+    DIAMOND_HUNTER.diamonds_found_this_session = DIAMOND_HUNTER.diamonds_found_this_session + 1
+    
+    -- Dosyaya kaydet
+    local file = fs.open(DIAMOND_HUNTER.diamond_log, "w")
+    if file then
+        file.write(textutils.serialize(DIAMOND_HUNTER.diamond_locations))
+        file.close()
+    end
+    
+    log("💎 YENİ DIAMOND! Lokasyon: (" .. x .. ", " .. y .. ", " .. z .. ")")
+    log("🎉 Bu session'da bulunan diamond: " .. DIAMOND_HUNTER.diamonds_found_this_session)
+end
+
+function calculateNextArea()
+    -- Bir sonraki mining alanını hesapla
+    local area_size = CONFIG.TUNNEL_LENGTH + 10 -- Buffer ekle
+    local current_x = DIAMOND_HUNTER.current_area.x
+    local current_z = DIAMOND_HUNTER.current_area.z
+    
+    -- Spiral pattern ile genişle (daha verimli coverage)
+    -- X pozitif yönde 3 alan, sonra Z pozitif yönde 3 alan, vs.
+    local completed_areas = #DIAMOND_HUNTER.mined_areas
+    local cycle = math.floor(completed_areas / 8) -- Her 8 alanda bir cycle
+    local position_in_cycle = completed_areas % 8
+    
+    local next_x, next_z = current_x, current_z
+    
+    if position_in_cycle == 0 then -- Sağa git
+        next_x = current_x + area_size
+    elseif position_in_cycle == 1 then -- Yukarı git  
+        next_z = current_z + area_size
+    elseif position_in_cycle == 2 then -- Sola git
+        next_x = current_x - area_size
+    elseif position_in_cycle == 3 then -- Aşağı git
+        next_z = current_z - area_size
+    elseif position_in_cycle == 4 then -- Sağa git (genişletilmiş)
+        next_x = current_x + area_size
+    elseif position_in_cycle == 5 then -- Yukarı git (genişletilmiş)
+        next_z = current_z + area_size
+    elseif position_in_cycle == 6 then -- Sola git (genişletilmiş)
+        next_x = current_x - area_size  
+    else -- position_in_cycle == 7, Aşağı git (genişletilmiş)
+        next_z = current_z - area_size
+    end
+    
+    return {x = next_x, z = next_z}
+end
+
+function moveToNewArea(target_area)
+    -- Yeni mining alanına git
+    log("🚀 Yeni mining alanına gidiliyor: X=" .. target_area.x .. ", Z=" .. target_area.z)
+    
+    -- Home'a dön önce (güvenli)
+    if not returnToHome() then
+        log("❌ Yeni alana gitmek için önce home'a dönülemedi")
+        return false
+    end
+    
+    -- Target pozisyona git
+    local target_x = target_area.x
+    local target_z = target_area.z
+    
+    while pos.x ~= target_x or pos.z ~= target_z do
+        if pos.x < target_x then
+            faceDirection(EAST)
+            if not moveForward() then return false end
+        elseif pos.x > target_x then
+            faceDirection(WEST)
+            if not moveForward() then return false end
+        elseif pos.z < target_z then
+            faceDirection(SOUTH)
+            if not moveForward() then return false end
+        elseif pos.z > target_z then
+            faceDirection(NORTH)
+            if not moveForward() then return false end
+        end
+    end
+    
+    -- Yeni home pozisyonunu ayarla
+    setHomePosition()
+    
+    log("✅ Yeni alan başlangıcına varıldı: (" .. pos.x .. ", " .. pos.z .. ")")
+    return true
+end
+
+-- ========================================
 -- UTILITY FUNCTIONS
 -- ========================================
 
@@ -194,14 +366,18 @@ end
 function digTunnelSection(digDown)
     -- Önce önündeki bloku kaz (Y=12 - turtle seviyesi)
     while turtle.detect() do
-        turtle.dig()
+        if turtle.dig() then
+            checkForDiamond("front", pos.x, pos.y, pos.z)
+        end
         sleep(0.1)
     end
     
     -- 3 kat mining için üst bloku da kaz (Y=13)
     if CONFIG.TUNNEL_HEIGHT >= 2 then
         while turtle.detectUp() do
-            turtle.digUp()
+            if turtle.digUp() then
+                checkForDiamond("up", pos.x, pos.y + 1, pos.z)
+            end
             sleep(0.1)
         end
     end
@@ -222,7 +398,9 @@ function digTunnelSection(digDown)
                 end
                 -- Güvenliyse alt bloku kaz (Y=11)
                 while turtle.detectDown() do
-                    turtle.digDown()
+                    if turtle.digDown() then
+                        checkForDiamond("down", pos.x, pos.y - 1, pos.z)
+                    end
                     sleep(0.1)
                 end
             end
@@ -230,6 +408,61 @@ function digTunnelSection(digDown)
     end
     
     return true
+end
+
+function checkForDiamond(direction, x, y, z)
+    -- Son kazılmış blokun diamond olup olmadığını kontrol et
+    local slot_start = turtle.getSelectedSlot()
+    
+    -- Inventory'yi tara, yeni eklenen diamond var mı?
+    for slot = 1, 16 do
+        if turtle.getItemCount(slot) > 0 then
+            turtle.select(slot)
+            local success, data = turtle.getItemDetail()
+            if success and data.name then
+                if string.find(data.name, "diamond") and not string.find(data.name, "ore") then
+                    -- Ham diamond bulundu! (diamond ore değil)
+                    saveDiamondLocation(x, y, z)
+                    
+                    -- Bu alanı özel işaretle (diamond expansion için)
+                    markAreaForExpansion(x, y, z)
+                    break
+                elseif string.find(data.name, "diamond_ore") then
+                    -- Diamond ore bulundu!
+                    saveDiamondLocation(x, y, z)
+                    
+                    -- Bu alanı özel işaretle (diamond expansion için)
+                    markAreaForExpansion(x, y, z)
+                    break
+                end
+            end
+        end
+    end
+    
+    -- Orijinal slot'a geri dön
+    turtle.select(slot_start)
+end
+
+function markAreaForExpansion(x, y, z)
+    -- Diamond bulunan alanı gelecekte 3x3 expansion için işaretle
+    local expansion_marker = {
+        x = x, y = y, z = z,
+        area_x = DIAMOND_HUNTER.current_area.x,
+        area_z = DIAMOND_HUNTER.current_area.z,
+        expansion_needed = true,
+        priority = "high"
+    }
+    
+    -- Bu alanın zaten işaretli olup olmadığını kontrol et
+    for _, existing in pairs(DIAMOND_HUNTER.diamond_locations) do
+        if existing.x == x and existing.y == y and existing.z == z then
+            existing.expansion_needed = true
+            existing.priority = "high"
+            return -- Zaten var, tekrar ekleme
+        end
+    end
+    
+    log("🎯 Alan expansion için işaretlendi: (" .. x .. ", " .. y .. ", " .. z .. ")")
 end
 
 function safeUp()
@@ -276,22 +509,21 @@ end
 -- ========================================
 
 function placeGroundTorch(steps_taken)
-    -- 3-kat mining torch sistemi:
-    -- 1. Turtle Y=12'de hareket ediyor
-    -- 2. Torch Y=11'e (aşağıya) yerleştir  
-    -- 3. Geri dönerken turtle Y=12'de kalır = ÇARPIŞMA YOK!
+    if steps_taken % CONFIG.TORCH_INTERVAL ~= 0 then
+        return true -- Torch koyma zamanı değil, bu bir hata değil.
+    end
     
-    if steps_taken % CONFIG.TORCH_INTERVAL ~= 0 then return false end
-    if not selectItem(CONFIG.TORCH_SLOT) then return false end
+    if not selectItem(CONFIG.TORCH_SLOT) then
+        log("🚨 KRİTİK: Torch bitti! Eve dönülüyor.")
+        return false -- Hata: Torch kalmadı.
+    end
     
-    -- Alt seviyeye torch yerleştir (Y=11)
     if turtle.placeDown() then
-        log("🔥 Torch yerleştirildi Y=" .. (pos.y - 1) .. " (turtle Y=" .. pos.y .. ") - step: " .. steps_taken)
-        log("   ✅ Geri dönerken çarpışma riski YOK!")
+        log("🔥 Torch yerleştirildi Y=" .. (pos.y - 1))
         return true
     else
-        log("⚠️  Alt seviyeye torch yerleştirilemedi")
-        return false
+        log("⚠️ Alt seviyeye torch yerleştirilemedi.")
+        return false -- Hata: Yerleştirilemedi.
     end
 end
 
@@ -480,37 +712,16 @@ end
 function mineForward(steps, place_torches)
     place_torches = place_torches or false
     for step = 1, steps do
-        if not checkFuel() then
-            log("⛽ Fuel azaldı, mining durduruluyor")
-            return false
-        end
+        if not checkFuel() then return false end
         if isInventoryFull() then
-            log("🎒 Inventory dolu, items boşaltılıyor")
-            if not dropItems() then
-                return false
-            end
+            if not dropItems() then return false end
         end
-
-        -- 1. Önce blokları kır
-        if not safeForward(place_torches) then
-            log("❌ Güvenlik riski nedeniyle mining durduruluyor")
-            return false
-        end
-
-        -- 2. Sonra, ilerlemeden ÖNCE torch koy
+        if not safeForward(place_torches) then return false end
         if place_torches then
-            placeGroundTorch(step)
+            if not placeGroundTorch(step) then return false end
         end
-
-        -- 3. En son ilerle
-        if not moveForward() then
-            log("❌ İleri hareket başarısız")
-            return false
-        end
-
-        if step % 10 == 0 then
-            log("🔨 Mining: " .. step .. "/" .. steps .. " blocks")
-        end
+        if not moveForward() then return false end
+        if step % 10 == 0 then log("🔨 Mining: " .. step .. "/" .. steps .. " blocks") end
     end
     return true
 end
@@ -532,6 +743,7 @@ end
 function branchMining()
     log("🚀 Branch Mining başlatılıyor...")
     log("📍 Hedef Level: Y=" .. CONFIG.MINING_LEVEL .. " (Tünel Yüksekliği: " .. CONFIG.TUNNEL_HEIGHT .. ")")
+    log("💎 Diamond Hunter Pro aktif! Otomatik diamond detection çalışıyor.")
     
     if CONFIG.TUNNEL_HEIGHT == 3 then
         log("💎 3-KAT ULTRA Tünel Modu:")
@@ -548,47 +760,69 @@ function branchMining()
     
     -- Ana tüneli kaz
     log("🛤️  Ana tünel kazılıyor...")
-    mineForward(CONFIG.TUNNEL_LENGTH, true)
+    if not mineForward(CONFIG.TUNNEL_LENGTH, true) then
+        return false
+    end
     
     -- Geri dön ana tünelin başına
     turnAround()
-    mineForward(CONFIG.TUNNEL_LENGTH, false)
+    if not mineForward(CONFIG.TUNNEL_LENGTH, false) then
+        return false
+    end
     turnAround()
     
     -- Yan dalları kaz
     local branches_made = 0
     for i = CONFIG.BRANCH_SPACING, CONFIG.TUNNEL_LENGTH, CONFIG.BRANCH_SPACING do
         -- Pozisyona git
-        mineForward(CONFIG.BRANCH_SPACING, false)
+        if not mineForward(CONFIG.BRANCH_SPACING, false) then
+            return false
+        end
         
         -- Sol dal
         turnLeft()
         log("🌿 Sol dal #" .. (branches_made + 1))
-        mineBranch(CONFIG.BRANCH_LENGTH, true)
+        if not mineBranch(CONFIG.BRANCH_LENGTH, true) then
+            return false
+        end
         turnRight() -- Ana tünele dön
         
         -- Sağ dal  
         turnRight()
         log("🌿 Sağ dal #" .. (branches_made + 2))
-        mineBranch(CONFIG.BRANCH_LENGTH, true)
+        if not mineBranch(CONFIG.BRANCH_LENGTH, true) then
+            return false
+        end
         turnLeft() -- Ana tünele dön
         
         branches_made = branches_made + 2
         log("✅ Toplam " .. branches_made .. " dal tamamlandı")
     end
     
+    -- Mining tamamlandı, bu alanı kaydet
+    table.insert(DIAMOND_HUNTER.mined_areas, {
+        x = DIAMOND_HUNTER.current_area.x,
+        z = DIAMOND_HUNTER.current_area.z,
+        completed_time = os.time(),
+        branches_count = branches_made,
+        diamonds_found = DIAMOND_HUNTER.diamonds_found_this_session
+    })
+    
     log("🎉 Branch Mining tamamlandı!")
     log("📊 Toplam dal sayısı: " .. branches_made)
+    log("💎 Bu alanda bulunan diamond: " .. DIAMOND_HUNTER.diamonds_found_this_session)
     log("🔥 3-kat torch sistemi: Y=" .. (CONFIG.MINING_LEVEL - 1) .. " seviyesine her " .. CONFIG.TORCH_INTERVAL .. " blokta bir torch yerleştirildi")
+    
+    return true
 end
 
--- ========================================
--- MAIN FUNCTION
--- ========================================
-
-function main()
-    log("🔥 ADVANCED MINING TURTLE v1.0")
-    log("================================")
+function diamondHunterMain()
+    log("💎 DIAMOND HUNTER PRO v1.0 BAŞLATILIYOR")
+    log("========================================")
+    
+    -- Diamond Hunter durumunu yükle
+    loadDiamondHunterState()
+    loadDiamondLocations()
     
     -- Başlangıç kontrolleri
     local current_fuel = turtle.getFuelLevel()
@@ -607,40 +841,149 @@ function main()
             log("💡 Öneriler:")
             log("   - Slot " .. CONFIG.FUEL_SLOT .. "'a coal/wood ekleyin")
             log("   - Turtle'ı fuel source yakınına götürün")
-            return
+            return false
         end
     end
     
     if not selectItem(CONFIG.TORCH_SLOT) then
         log("❌ Slot " .. CONFIG.TORCH_SLOT .. "'ta torch bulunamadı!")
-        return
+        return false
     end
     
     if not selectItem(CONFIG.CHEST_SLOT) then
         log("❌ Slot " .. CONFIG.CHEST_SLOT .. "'ta chest bulunamadı!")
-        return
+        return false
     end
     
     log("✅ Tüm kontroller başarılı")
     log("🎯 Hedef Level: Y=" .. CONFIG.MINING_LEVEL .. " (Yükseklik: " .. CONFIG.TUNNEL_HEIGHT .. ")")
+    log("💎 Diamond Hunter Pro aktif!")
     
-    -- Home pozisyonunu kaydet
-    setHomePosition()
-    
-    -- Mining başlat
-    branchMining()
-    
-    -- Mining bittiğinde home'a dön ve final deposit yap
-    log("🏠 Mining tamamlandı, home'a dönülüyor...")
-    if returnToHome() then
-        depositItemsAtHome()
-        log("✨ Tüm items home chest'e aktarıldı!")
-    else
-        log("⚠️  Home'a dönüş başarısız, items turtle'da kaldı")
+    -- İlk kez çalışıyorsa home pozisyon ayarla
+    if DIAMOND_HUNTER.current_area.x == 0 and DIAMOND_HUNTER.current_area.z == 0 then
+        setHomePosition()
     end
     
-    log("🎉 Mining işlemi tamamlandı!")
+    local mining_success = branchMining()
+    
+    if not mining_success then
+        log("⚠️ Mining görevi tamamlanamadı (yakıt/torch bitti veya bir sorun oluştu).")
+    else
+        log("✅ Bu alan mining'i başarıyla tamamlandı.")
+        
+        -- State'i kaydet
+        saveDiamondHunterState()
+        
+        -- Otomatik area expansion
+        log("🔄 Bir sonraki mining alanı hesaplanıyor...")
+        local next_area = calculateNextArea()
+        DIAMOND_HUNTER.current_area = next_area
+        
+        log("🚀 Bir sonraki alan: X=" .. next_area.x .. ", Z=" .. next_area.z)
+        log("💡 Devam etmek için 'main()' komutunu tekrar çalıştırın!")
+    end
+    
+    -- Her durumda eve dön ve items'ları boşalt
+    log("🏠 Görev sonrası eve dönülüyor...")
+    if returnToHome() then
+        depositItemsAtHome()
+        log("✅ Tüm items home chest'e aktarıldı!")
+    else
+        log("⚠️ Eve dönüş başarısız, items turtle'da kaldı")
+    end
+    
+    -- Diamond Hunter istatistikleri
+    log("📊 DIAMOND HUNTER İSTATİSTİKLERİ:")
+    log("   🏗️ Toplam kazılmış alan: " .. #DIAMOND_HUNTER.mined_areas)
+    log("   💎 Toplam bulunan diamond: " .. #DIAMOND_HUNTER.diamond_locations)
+    log("   🎯 Bu session diamond: " .. DIAMOND_HUNTER.diamonds_found_this_session)
+    
+    log("🎉 Diamond Hunter Pro mining tamamlandı!")
+    return mining_success
 end
 
--- SCRIPT'İ BAŞLAT
-main()
+function main()
+    return diamondHunterMain()
+end
+
+-- ========================================
+-- DIAMOND HUNTER PRO KULLANICI ARAYÜZÜ
+-- ========================================
+
+-- Fuel helper fonksiyonlarını global yap
+_G.showFuelStatus = showFuelStatus
+_G.refuelNow = refuelNow
+_G.quickFuelCheck = quickFuelCheck
+
+-- Diamond Hunter Pro komutları
+_G.main = main
+_G.diamondStats = function()
+    loadDiamondHunterState()
+    loadDiamondLocations()
+    
+    print("💎 DIAMOND HUNTER PRO İSTATİSTİKLERİ")
+    print("=====================================")
+    print("🏗️ Toplam kazılmış alan: " .. #DIAMOND_HUNTER.mined_areas)
+    print("💎 Toplam bulunan diamond: " .. #DIAMOND_HUNTER.diamond_locations)
+    print("📍 Mevcut alan: X=" .. DIAMOND_HUNTER.current_area.x .. ", Z=" .. DIAMOND_HUNTER.current_area.z)
+    
+    if #DIAMOND_HUNTER.diamond_locations > 0 then
+        print("🎯 Son 5 diamond lokasyonu:")
+        local recent_count = math.min(5, #DIAMOND_HUNTER.diamond_locations)
+        for i = #DIAMOND_HUNTER.diamond_locations - recent_count + 1, #DIAMOND_HUNTER.diamond_locations do
+            local diamond = DIAMOND_HUNTER.diamond_locations[i]
+            print("   💎 (" .. diamond.x .. ", " .. diamond.y .. ", " .. diamond.z .. ")")
+        end
+    end
+end
+
+_G.resetDiamondHunter = function()
+    if fs.exists(DIAMOND_HUNTER.state_file) then
+        fs.delete(DIAMOND_HUNTER.state_file)
+    end
+    if fs.exists(DIAMOND_HUNTER.diamond_log) then
+        fs.delete(DIAMOND_HUNTER.diamond_log)
+    end
+    DIAMOND_HUNTER.current_area = {x = 0, z = 0}
+    DIAMOND_HUNTER.mined_areas = {}
+    DIAMOND_HUNTER.diamond_locations = {}
+    DIAMOND_HUNTER.diamonds_found_this_session = 0
+    print("🔄 Diamond Hunter Pro sıfırlandı. Yeni mining session başlatılabilir.")
+end
+
+-- Başlangıç mesajları
+print()
+print("💎 DIAMOND HUNTER PRO v1.0 HAZIR!")
+print("===================================")
+print()
+print("🎯 KOMUTLAR:")
+print("   main()              - Diamond mining başlat")
+print("   diamondStats()      - İstatistikleri göster")  
+print("   resetDiamondHunter() - Sistemi sıfırla")
+print()
+print("⚙️  YARDIMCI KOMUTLAR:")
+print("   refuelNow()         - Fuel doldur")
+print("   showFuelStatus()    - Fuel durumu")
+print()
+print("🚀 BAŞLATMAK İÇİN: 'main()' yazın")
+print()
+
+-- İlk fuel kontrolü
+if turtle.getFuelLevel() < CONFIG.FUEL_MIN then
+    print("⚠️  Fuel azaldı! Önce 'refuelNow()' çalıştırın.")
+else
+    print("✅ Fuel durumu iyi: " .. turtle.getFuelLevel())
+end
+
+-- Diamond Hunter durumunu göster
+loadDiamondHunterState()
+if #DIAMOND_HUNTER.mined_areas > 0 then
+    print("📂 Önceki session bulundu: " .. #DIAMOND_HUNTER.mined_areas .. " alan kazılmış")
+    print("🎯 Sonraki alan: X=" .. DIAMOND_HUNTER.current_area.x .. ", Z=" .. DIAMOND_HUNTER.current_area.z)
+else
+    print("🆕 Yeni Diamond Hunter Pro session")
+end
+
+print()
+print("💡 Diamond Hunter Pro ile sonsuz diamond empire kurabilirsiniz!")
+print("   Her 'main()' komutu yeni bir alan kazacak ve otomatik genişleyecek.")
