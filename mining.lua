@@ -148,8 +148,15 @@ end
 -- TORCH SYSTEM
 function placeTorch(step)
     if step % CONFIG.TORCH_INTERVAL == 0 and selectItem(CONFIG.TORCH_SLOT) then
-        turtle.placeDown()
-        log("🔥 Torch placed at step " .. step)
+        -- Önce aşağıdaki bloğu kaz, sonra torch koy
+        if turtle.detectDown() then
+            turtle.digDown()
+        end
+        if turtle.placeDown() then
+            log("🔥 Torch placed at step " .. step)
+        else
+            log("⚠️ Failed to place torch at step " .. step)
+        end
     end
 end
 
@@ -161,34 +168,76 @@ function isInventoryFull()
     return true
 end
 
+-- Güvenli hareket fonksiyonu (torch kırmaz)
+function safeMove()
+    while not turtle.forward() do
+        if turtle.detect() then
+            local success, data = turtle.inspect()
+            -- Torch ise kırma, sadece geç
+            if success and data.name and string.find(data.name, "torch") then
+                log("🔥 Torch detected, trying to move around...")
+                turtle.up()
+                turtle.forward()
+                turtle.down()
+                break
+            else
+                turtle.dig()
+            end
+        end
+        turtle.attack() -- Mob varsa saldır
+    end
+    
+    -- Pozisyon güncelle
+    if direction == NORTH then updatePos(0, 0, -1)
+    elseif direction == EAST then updatePos(1, 0, 0)
+    elseif direction == SOUTH then updatePos(0, 0, 1)
+    elseif direction == WEST then updatePos(-1, 0, 0) end
+end
+
 function returnHome()
     log("🏠 Returning home...")
     
-    -- Simple pathfinding
+    -- X ekseni
     while pos.x ~= home_pos.x do
         if pos.x < home_pos.x then
             faceDirection(EAST)
         else
             faceDirection(WEST)
         end
-        digAndMove()
+        safeMove() -- digAndMove yerine safeMove kullan
     end
     
+    -- Z ekseni
     while pos.z ~= home_pos.z do
         if pos.z < home_pos.z then
             faceDirection(SOUTH)
         else
             faceDirection(NORTH)
         end
-        digAndMove()
+        safeMove() -- digAndMove yerine safeMove kullan
     end
     
+    -- Y ekseni
     while pos.y ~= home_pos.y do
         if pos.y < home_pos.y then
-            while not turtle.up() do turtle.digUp() end
+            while not turtle.up() do 
+                if turtle.detectUp() then
+                    local success, data = turtle.inspectUp()
+                    if not (success and data.name and string.find(data.name, "chest")) then
+                        turtle.digUp()
+                    end
+                end
+            end
             updatePos(0, 1, 0)
         else
-            while not turtle.down() do turtle.digDown() end
+            while not turtle.down() do 
+                if turtle.detectDown() then
+                    local success, data = turtle.inspectDown()
+                    if not (success and data.name and string.find(data.name, "chest")) then
+                        turtle.digDown()
+                    end
+                end
+            end
             updatePos(0, -1, 0)
         end
     end
@@ -204,12 +253,28 @@ end
 
 function depositItems()
     log("📦 Depositing items...")
+    
+    -- Sandık kontrolü
+    if not turtle.detectDown() then
+        log("⚠️ No chest detected below! Placing spare chest...")
+        if selectItem(CONFIG.CHEST_SLOT) then
+            turtle.placeDown()
+        else
+            log("❌ No spare chest available!")
+            return false
+        end
+    end
+    
+    -- Eşyaları bırak
     for slot = 2, 14 do
         if turtle.getItemCount(slot) > 0 then
             turtle.select(slot)
-            turtle.dropDown()
+            if not turtle.dropDown() then
+                log("⚠️ Failed to drop items from slot " .. slot)
+            end
         end
     end
+    return true
 end
 
 -- MINING FUNCTIONS
@@ -219,15 +284,36 @@ function mineStrip(length)
         
         if isInventoryFull() then
             local saved = {x = pos.x, y = pos.y, z = pos.z, dir = direction}
+            log("📦 Inventory full, returning to base...")
             returnHome()
-            depositItems()
-            -- Dönüş sonrası doğru konuma git
-            pos = {x = home_pos.x, y = home_pos.y, z = home_pos.z}
-            direction = NORTH
-            faceDirection(saved.dir)
-            -- Main tünele geri git
-            while pos.x ~= saved.x or pos.z ~= saved.z do
-                digAndMove()
+            if depositItems() then
+                log("🔄 Returning to mining position...")
+                -- Pozisyonu sıfırla
+                pos = {x = home_pos.x, y = home_pos.y, z = home_pos.z}
+                direction = NORTH
+                
+                -- Kaydedilen pozisyona geri git
+                while pos.x ~= saved.x or pos.z ~= saved.z or pos.y ~= saved.y do
+                    if pos.x ~= saved.x then
+                        if pos.x < saved.x then faceDirection(EAST) else faceDirection(WEST) end
+                        safeMove()
+                    elseif pos.z ~= saved.z then
+                        if pos.z < saved.z then faceDirection(SOUTH) else faceDirection(NORTH) end
+                        safeMove()
+                    elseif pos.y ~= saved.y then
+                        if pos.y < saved.y then
+                            turtle.up()
+                            updatePos(0, 1, 0)
+                        else
+                            turtle.down()
+                            updatePos(0, -1, 0)
+                        end
+                    end
+                end
+                
+                -- Yönü düzelt
+                faceDirection(saved.dir)
+                log("✅ Resumed mining at position")
             end
         end
         
@@ -299,14 +385,33 @@ function main()
     log("💎 DIAMOND MINING TURTLE v2.0")
     log("==============================")
     
-    -- Check setup
+    -- Sandık kontrolü (başlangıçta kırmamak için)
+    if turtle.detectDown() then
+        local success, data = turtle.inspectDown()
+        if success and data.name and string.find(data.name, "chest") then
+            log("✅ Chest detected below turtle")
+        else
+            log("⚠️ Block below is not a chest, placing one...")
+            if selectItem(CONFIG.CHEST_SLOT) then
+                turtle.digDown()
+                turtle.placeDown()
+            end
+        end
+    else
+        log("⚠️ No block below, placing chest...")
+        if selectItem(CONFIG.CHEST_SLOT) then
+            turtle.placeDown()
+        end
+    end
+    
+    -- Setup kontrolü
     if not selectItem(CONFIG.TORCH_SLOT) then
         log("❌ No torches in slot " .. CONFIG.TORCH_SLOT)
         return
     end
     
-    if not selectItem(CONFIG.CHEST_SLOT) then
-        log("❌ No chest in slot " .. CONFIG.CHEST_SLOT)
+    if turtle.getItemCount(CONFIG.CHEST_SLOT) == 0 then
+        log("❌ No spare chest in slot " .. CONFIG.CHEST_SLOT)
         return
     end
     
@@ -323,7 +428,7 @@ function main()
     
     log("✅ Setup complete")
     log("🎯 Target: Y=11 Diamond Level")
-    log("📏 Pattern: 2x1 Strip Mining")
+    log("📏 Pattern: 3x1 Strip Mining")
     
     -- Set home and start mining
     setHome()
@@ -334,7 +439,7 @@ function main()
     returnHome()
     depositItems()
     
-    log("� Minifng complete!")
+    log("✅ Mining complete!")
     log("💎 Total diamonds found: " .. diamonds_found)
 end
 
